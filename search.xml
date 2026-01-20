@@ -84,26 +84,7 @@ keepWaiting &#x3D;&#x3D; false
 自定义条件判断，返回 false 时恢复
 
 
-三、内部原理
-
-
-
-
-假设协程队列是这样：
-
-
-
-
-List waitingCoroutines;
-
-
-
-
-每帧大致伪代码：
-
-
-
-
+三、内部原理假设协程队列是这样：List waitingCoroutines; 每帧大致伪代码：  
 for each coroutine in waitingCoroutines:    object yieldObj = coroutine.Current;        if (CanResume(yieldObj)):        bool hasNext = coroutine.MoveNext();        if (!hasNext) remove from waitingCoroutines
 
 CanResume(yieldObj) 的逻辑：  
