@@ -2,7 +2,7 @@
 <search>
   <entry>
     <title>ASTC和ETC2</title>
-    <url>/xiaomin.github.io/2026/01/02/ASTC_ETC2/</url>
+    <url>/xiaomin/2026/01/02/ASTC_ETC2/</url>
     <content><![CDATA[最近项目中遇到了图片发糊的问题，查找发现是跟图片的压缩格式有关。我们是一个老项目，用的是ETC2压缩格式，因为ETC2可以支持市场上绝大多数的设备，特别是一些低端机。我们项目主要是面向东南亚国家，低端机比较多，所以选择了ETC2，但是发展至今，东南亚玩家的设备性能更好了。我们做过一次埋点统计玩家的设备ASTC支持率，几乎占了绝大部分，所以我们选择了压缩质量更好的ASTC。
 数据来源：https://developer.android.google.cn/guide/playcore/asset-delivery/texture-compression?hl=zh-cn
 让我先分别介绍一下ASTC和ETC2的压缩原理：一、ETC2ETC（Ericsson Texture Compression）最初为移动设备开发，如今它是安卓的标准压缩方案。其原理简单来说，是将4×4 的像素块编码为2×4或4×2像素的上下或者左右两个块的方法，每个块指定一个基色，每个像素的颜色通过一个编码为相对于这些基色偏移的灰度值确定。所以每个块是4 × 4 × 8 &#x3D; 128 bit| A A | B B || A A | B B || A A | B B || A A | B B | 每像素颜色计算：  pixel &#x3D; baseColor + modifier[index]
@@ -47,7 +47,7 @@
   </entry>
   <entry>
     <title>Unity协程的原理</title>
-    <url>/xiaomin.github.io/2025/11/21/IEnumerator/</url>
+    <url>/xiaomin/2025/10/21/IEnumerator/</url>
     <content><![CDATA[一、协程的概念
 
 协程不是线程  ○ 它不会并行执行，也不会占用系统线程  ○ 全部在 Unity 主线程执行
