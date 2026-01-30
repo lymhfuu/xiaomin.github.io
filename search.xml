@@ -1,6 +1,101 @@
 <?xml version="1.0" encoding="utf-8"?>
 <search>
   <entry>
+    <title>Tolua框架学习（Wrap文件）</title>
+    <url>/xiaomin/2024/10/02/ToLua_Wrap/</url>
+    <content><![CDATA[
+/* 页面内深色代码块样式：对本页所有 fenced code blocks 生效 */
+pre, pre code, code {
+    background: #0b1116 !important;
+    color: #d6deeb !important;
+    border-radius: 6px;
+}
+pre {
+    padding: 16px !important;
+    overflow: auto;
+    line-height: 1.5;
+}
+code { font-family: Consolas, "Courier New", monospace; }
+
+
+
+一、什么是Wrap文件Wrap（包装类） 是 ToLua 自动生成的 C# 静态类，作为 Lua 和 C# 之间的桥梁。每个需要导出到 Lua 的 C# 类都会生成一个对应的 XxxWrap.cs 文件。┌─────────────┐         ┌────────────────┐         ┌─────────────────┐│  Lua 脚本    		│ ──────▶ │  XxxWrap.cs       │ ──────▶ │  原生 C# 类          ││ go:SetActive 	│         	│ (自动生成桥梁)  	     │        		│ GameObject            │└─────────────┘         └────────────────┘         └─────────────────┘二、生成流程总览┌──────────────────┐│ 1. CustomSettings 	     │  ← 用户配置要导出的类型列表└────────┬─────────┘         	     ▼┌──────────────────┐│ 2. ToLuaMenu     		     │  ← 菜单入口，处理类型依赖└────────┬─────────┘         	     ▼┌──────────────────┐│ 3. ToLuaExport   		     │  ← 核心：通过反射分析类型，生成代码└────────┬─────────┘         	     ▼┌──────────────────┐│ 4. XxxWrap.cs    		     │  ← 输出：生成的包装类文件└────────┬─────────┘         	     ▼┌──────────────────┐│ 5. LuaBinder.cs  		     │  ← 汇总：注册所有 Wrap 到 LuaState└──────────────────┘CustomSetting代码结构如下：
+// 定义要导出到 Lua 的类型public static BindType[] customTypeList = &#123;    _GT(typeof(GameObject)),           // 导出 GameObject    _GT(typeof(Transform)),            // 导出 Transform    _GT(typeof(UILabel)),              // 导出 NGUI 组件    // ... 更多类型&#125;;// 定义要导出的委托类型public static DelegateType[] customDelegateList = &#123;    _DT(typeof(Action)),    _DT(typeof(UnityAction)),&#125;;生成Wrap文件接口：[MenuItem(&quot;Lua/Gen Lua Wrap Files&quot;, false, 1)]public static void GenerateClassWraps() &#123;    // 1. 获取配置的类型列表    BindType[] typeList = CustomSettings.customTypeList;        // 2. 处理继承关系，自动添加基类    BindType[] list = GenBindTypes(typeList);        // 3. 遍历每个类型，生成 Wrap    for (int i = 0; i &lt; list.Length; i++) &#123;        ToLuaExport.Clear();        ToLuaExport.className = list[i].name;        ToLuaExport.type = list[i].type;        // ... 设置其他属性        ToLuaExport.Generate(CustomSettings.saveDir);  // 核心生成逻辑    &#125;&#125;
+C#类转化成Wrap文件原理这个函数会通过反射收集类里所有的方法、属性、事件、字段等。然后根据各方法和属性的封装进行筛选，如私有变量和函数就会被剔除掉不会放入Wrap文件当中，相应Lua也调用不到。
+public static void Generate(string dir) &#123;    // 1. 初始化    InitMethods();       // 收集所有方法    InitPropertyList();  // 收集所有属性、字段、事件    InitCtorList();      // 收集所有构造函数        // 2. 开始生成代码    BeginCodeGen();      // 生成类定义头        // 3. 生成各部分代码    GenRegisterFunction();      // 生成 Register 函数    GenConstructFunction();     // 生成构造函数包装    GenItemPropertyFunction();  // 生成索引器    GenFunctions();             // 生成所有方法包装    GenIndexFunc();             // 生成 __index 元方法    GenNewIndexFunc();          // 生成 __newindex 元方法    GenEventFunctions();        // 生成事件相关函数        // 4. 结束生成    EndCodeGen(dir);     // 保存文件&#125;
+下面以收集方法的函数举例，其他类型基本相似：
+List&lt;_MethodBase&gt; list = new List&lt;_MethodBase&gt;();MethodInfo[] infos = type.GetMethods(BindingFlags.Instance | binding);for (int i = 0; i &lt; infos.Length; i++)&#123;    list.Add(new _MethodBase(infos[i]));&#125;for (int i = list.Count - 1; i &gt;= 0; --i)&#123;    //去掉操作符函数    if (list[i].Name.StartsWith(&quot;op_&quot;) || list[i].Name.StartsWith(&quot;add_&quot;) || list[i].Name.StartsWith(&quot;remove_&quot;))    &#123;        if (!IsNeedOp(list[i].Name))        &#123;            list.RemoveAt(i);        &#125;        continue;    &#125;    //扔掉 unity3d 废弃的函数                    if (IsObsolete(list[i].Method))    &#123;        list.RemoveAt(i);    &#125;&#125;
+三、生成的 Wrap 代码结构以 UnityEngine_GameObjectWrap.cs 为例：
+public class UnityEngine_GameObjectWrap&#123;    // ==================== 1. 注册函数 ====================    public static void Register(LuaState L)    &#123;        // 开始类定义，指定基类        L.BeginClass(typeof(GameObject), typeof(UnityEngine.Object));    // 注册方法    L.RegFunction(&quot;SetActive&quot;, SetActive);    L.RegFunction(&quot;GetComponent&quot;, GetComponent);    L.RegFunction(&quot;Find&quot;, Find);    L.RegFunction(&quot;New&quot;, _CreateUnityEngine_GameObject);  // 构造函数        // 注册元方法    L.RegFunction(&quot;__eq&quot;, op_Equality);    L.RegFunction(&quot;__tostring&quot;, ToLua.op_ToString);        // 注册属性 (getter, setter)    L.RegVar(&quot;transform&quot;, get_transform, null);        // 只读    L.RegVar(&quot;layer&quot;, get_layer, set_layer);           // 可读写    L.RegVar(&quot;activeSelf&quot;, get_activeSelf, null);      // 只读        L.EndClass();&#125;// ==================== 2. 构造函数包装 ====================[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]static int _CreateUnityEngine_GameObject(IntPtr L)&#123;    int count = LuaDLL.lua_gettop(L);  // 获取参数数量        if (count == 0) &#123;        // new GameObject()        GameObject obj = new GameObject();        ToLua.PushSealed(L, obj);        return 1;    &#125;    else if (count == 1 &amp;&amp; TypeChecker.CheckTypes&lt;string&gt;(L, 1)) &#123;        // new GameObject(name)        string arg0 = ToLua.ToString(L, 1);        GameObject obj = new GameObject(arg0);        ToLua.PushSealed(L, obj);        return 1;    &#125;    // ... 处理其他重载&#125;// ==================== 3. 方法包装 ====================[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]static int SetActive(IntPtr L)&#123;    try &#123;        // 检查参数数量        ToLua.CheckArgsCount(L, 2);                // 从栈上获取 self 对象        GameObject obj = (GameObject)ToLua.CheckObject(L, 1, typeof(GameObject));                // 从栈上获取参数        bool arg0 = LuaDLL.luaL_checkboolean(L, 2);                // 调用真正的 C# 方法        obj.SetActive(arg0);                return 0;  // 无返回值    &#125;    catch (Exception e) &#123;        return LuaDLL.toluaL_exception(L, e);    &#125;&#125;// ==================== 4. 属性 Getter ====================[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]static int get_transform(IntPtr L)&#123;    object o = null;    try &#123;        o = ToLua.ToObject(L, 1);        GameObject obj = (GameObject)o;        Transform ret = obj.transform;        ToLua.Push(L, ret);  // 将返回值压入栈        return 1;    &#125;    catch (Exception e) &#123;        return LuaDLL.toluaL_exception(L, e, o, &quot;attempt to get transform&quot;);    &#125;&#125;// ==================== 5. 属性 Setter ====================[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]static int set_layer(IntPtr L)&#123;    object o = null;    try &#123;        o = ToLua.ToObject(L, 1);        GameObject obj = (GameObject)o;        int arg0 = (int)LuaDLL.luaL_checknumber(L, 2);        obj.layer = arg0;        return 0;    &#125;    catch (Exception e) &#123;        return LuaDLL.toluaL_exception(L, e, o, &quot;attempt to set layer&quot;);    &#125;&#125;&#125;
+生成Wrap类后需要通过LuaBinder统一注册到LuaState：
+public static class LuaBinder&#123;    public static void Bind(LuaState L)    &#123;        L.BeginModule(null);              // 全局模块                // 注册各个 Wrap        AnimationMgrWrap.Register(L);        CommonUtilsWrap.Register(L);        // ...         L.BeginModule(&quot;UnityEngine&quot;);     // UnityEngine 命名空间        UnityEngine_GameObjectWrap.Register(L);        UnityEngine_TransformWrap.Register(L);        // ...        L.EndModule();                L.EndModule();    &#125;&#125;
+四、具体Lua调用到C#函数的流程当 Lua 调用go：SetActive(true)时：
+
+Lua 调用 SetActive ↓
+查找 GameObject metatable 的 SetActive 函数 ↓
+调用 UnityEngine_GameObjectWrap.SetActive(IntPtr L) ↓
+从 Lua 栈获取参数:
+位置 1: self (GameObject userdata)
+位置 2: true (boolean)   ↓
+
+
+通过 ObjectTranslator 将 userdata 转换为 C# GameObject ↓
+调用真正的 C# 方法: obj.SetActive(true) ↓
+返回结果到 Lua 栈第一步到第二步比较好理解，lua调用SetActive的时候首先就是查找GameObject元表里是否有SetActive这个方法，有则调用。而第二步到第三步可能会有点疑问为什么可以直接调用到Wrap文件，要理解这一点需要理解ToLua是如何把Wrap文件注册到Lua表里的。看代码：
+
+// C# 端执行 Registerpublic static void Register(LuaState L)&#123;    L.BeginClass(typeof(GameObject), ...);    L.RegFunction(&quot;SetActive&quot;, SetActive);  // ← 关键！    L.EndClass();&#125;// RegFunction 的实现public void RegFunction(string name, LuaCSFunction func)&#123;    // 把 C# 函数转成内存地址（函数指针）    IntPtr fn = Marshal.GetFunctionPointerForDelegate(func);        // 调用 C 库，把这个函数指针存入当前 Lua table    LuaDLL.tolua_function(L, name, fn);&#125;
+可以看到在注册的时候会先把C#的SetActive函数转成函数指针然后放入Lua表里，也就是说Lua端执行SetActive函数就是直接执行的Wrap文件的SetActive函数！
+]]></content>
+      <categories>
+        <category>Unity开发</category>
+      </categories>
+  </entry>
+  <entry>
+    <title>ASTC和ETC2</title>
+    <url>/xiaomin/2026/01/02/ASTC_ETC2/</url>
+    <content><![CDATA[最近项目中遇到了图片发糊的问题，查找发现是跟图片的压缩格式有关。我们是一个老项目，用的是ETC2压缩格式，因为ETC2可以支持市场上绝大多数的设备，特别是一些低端机。我们项目主要是面向东南亚国家，低端机比较多，所以选择了ETC2，但是发展至今，东南亚玩家的设备性能更好了。我们做过一次埋点统计玩家的设备ASTC支持率，几乎占了绝大部分，所以我们选择了压缩质量更好的ASTC。
+数据来源：https://developer.android.google.cn/guide/playcore/asset-delivery/texture-compression?hl=zh-cn
+让我先分别介绍一下ASTC和ETC2的压缩原理：一、ETC2ETC（Ericsson Texture Compression）最初为移动设备开发，如今它是安卓的标准压缩方案。其原理简单来说，是将4×4 的像素块编码为2×4或4×2像素的上下或者左右两个块的方法，每个块指定一个基色，每个像素的颜色通过一个编码为相对于这些基色偏移的灰度值确定。所以每个块是4 × 4 × 8 &#x3D; 128 bit| A A | B B || A A | B B || A A | B B || A A | B B | 每像素颜色计算：  pixel &#x3D; baseColor + modifier[index]
+二、ASTCASTC相比于ETC2有更加灵活的切块策略，可选的有4×4、5×5、6×6、8×8、10×10、12×12。
+虽然有这么多的选择，但不变的是每个块依旧是固定128bit。每个块会自适应分区， 分为 1~4 个子区域（subsets），每个区域内颜色渐变平滑。分区方式通过一个 Partition ID 控制（基于预定义的分区模式表，几百种可能）。 每个区域使用两个端点色（endpoint colors），块内像素颜色通过 插值 得到。每个块存储了以下数据：● 分区数量● 分区模式 ID● 端点色模式（bit 深度）● 索引精度 这样 GPU 解码器知道如何按规则重建颜色。解码一个块的流程：
+
+从 16 字节中读取模式信息。
+确定分区模式，将像素划分到子区域。
+读取并反量化端点色。
+根据索引权重在端点色间插值。
+得到最终像素颜色。GPU 中这是硬件级并行解码，几乎没有性能损耗。（一）分区数量根据块的尺寸的不同，块的分区数量也不同。一般来说尺寸越大，分区越少。因为每一个分区都需要储存一对端点色和索引精度，而块的大小是固定的，所以分区数量一般与尺寸成反比关系。
+
+
+
+
+块尺寸
+常见分区数
+
+
+
+4×4
+1~3（甚至 4）
+
+
+6×6
+1~2
+
+
+8×8
+1（偶尔 2）
+
+
+12×12
+几乎都是 1
+
+
+而分区方式有很多种，通过预定义的 Partition ID控制。例如有：横着切 &#x2F; 竖着切 &#x2F; 斜着切 &#x2F; Z 字形 &#x2F; 不规则等。这些灵活的分区方式决定了ASTC具有更精准的颜色插值。（二）端点色模式端点色模式简单来说就是显示端点色颜色的模式，通常有：RGB、L、查分、HDR模式，ASTC可以根据每个像素需要存储的颜色类型来自由选择颜色模式。比如有一个色块只有亮暗变化，那就只需要存储Alpha值，如果这时候还存储RGB颜色就会浪费bit，所以这个时候可以选择亮度模式（L）；而RGB模式可以表达的颜色最自由，所以它适合颜色负责的块。（三）索引精度： 索引精度 &#x3D; 每个像素用多少 bit，来表示它在端点色之间的位置（插值比例）想象你有两种颜色：● 左端：黑色● 右端：白色中间有一个滑块，决定颜色偏向哪一边 低索引精度（2 bit）  ：可选位置：4 个[黑]──┬──┬──┬──[白]      0  1  2  3只能选这 4 个位置之一， 颜色是 跳着变的 高索引精度（6 bit）可选位置：64 个[黑]──────────────────────────────[白]  颜色变化 非常平滑所以索引精度代表这个像素能在俩个端点色中选择用什么颜色，越高，则颜色越平滑。
+]]></content>
+      <categories>
+        <category>Unity开发</category>
+      </categories>
+  </entry>
+  <entry>
     <title>Unity协程的原理</title>
     <url>/xiaomin/2025/10/02/IEnumerator/</url>
     <content><![CDATA[一、协程的概念
@@ -96,101 +191,6 @@ for each coroutine in waitingCoroutines:    object yieldObj = coroutine.Current;
 
 CanResume(yieldObj) 的逻辑：  
 bool CanResume(object yieldObj)&#123;    if (yieldObj == null) return true; // 下一帧立即恢复    if (yieldObj is WaitForSeconds wfs) return wfs.timeElapsed &gt;= wfs.duration;    if (yieldObj is WaitForFixedUpdate) return FixedUpdateDoneThisFrame;    if (yieldObj is WaitForEndOfFrame) return EndOfFrameReached;    if (yieldObj is ICustomYieldInstruction c) return !c.keepWaiting;    return false;&#125;]]></content>
-      <categories>
-        <category>Unity开发</category>
-      </categories>
-  </entry>
-  <entry>
-    <title>ASTC和ETC2</title>
-    <url>/xiaomin/2026/01/02/ASTC_ETC2/</url>
-    <content><![CDATA[最近项目中遇到了图片发糊的问题，查找发现是跟图片的压缩格式有关。我们是一个老项目，用的是ETC2压缩格式，因为ETC2可以支持市场上绝大多数的设备，特别是一些低端机。我们项目主要是面向东南亚国家，低端机比较多，所以选择了ETC2，但是发展至今，东南亚玩家的设备性能更好了。我们做过一次埋点统计玩家的设备ASTC支持率，几乎占了绝大部分，所以我们选择了压缩质量更好的ASTC。
-数据来源：https://developer.android.google.cn/guide/playcore/asset-delivery/texture-compression?hl=zh-cn
-让我先分别介绍一下ASTC和ETC2的压缩原理：一、ETC2ETC（Ericsson Texture Compression）最初为移动设备开发，如今它是安卓的标准压缩方案。其原理简单来说，是将4×4 的像素块编码为2×4或4×2像素的上下或者左右两个块的方法，每个块指定一个基色，每个像素的颜色通过一个编码为相对于这些基色偏移的灰度值确定。所以每个块是4 × 4 × 8 &#x3D; 128 bit| A A | B B || A A | B B || A A | B B || A A | B B | 每像素颜色计算：  pixel &#x3D; baseColor + modifier[index]
-二、ASTCASTC相比于ETC2有更加灵活的切块策略，可选的有4×4、5×5、6×6、8×8、10×10、12×12。
-虽然有这么多的选择，但不变的是每个块依旧是固定128bit。每个块会自适应分区， 分为 1~4 个子区域（subsets），每个区域内颜色渐变平滑。分区方式通过一个 Partition ID 控制（基于预定义的分区模式表，几百种可能）。 每个区域使用两个端点色（endpoint colors），块内像素颜色通过 插值 得到。每个块存储了以下数据：● 分区数量● 分区模式 ID● 端点色模式（bit 深度）● 索引精度 这样 GPU 解码器知道如何按规则重建颜色。解码一个块的流程：
-
-从 16 字节中读取模式信息。
-确定分区模式，将像素划分到子区域。
-读取并反量化端点色。
-根据索引权重在端点色间插值。
-得到最终像素颜色。GPU 中这是硬件级并行解码，几乎没有性能损耗。（一）分区数量根据块的尺寸的不同，块的分区数量也不同。一般来说尺寸越大，分区越少。因为每一个分区都需要储存一对端点色和索引精度，而块的大小是固定的，所以分区数量一般与尺寸成反比关系。
-
-
-
-
-块尺寸
-常见分区数
-
-
-
-4×4
-1~3（甚至 4）
-
-
-6×6
-1~2
-
-
-8×8
-1（偶尔 2）
-
-
-12×12
-几乎都是 1
-
-
-而分区方式有很多种，通过预定义的 Partition ID控制。例如有：横着切 &#x2F; 竖着切 &#x2F; 斜着切 &#x2F; Z 字形 &#x2F; 不规则等。这些灵活的分区方式决定了ASTC具有更精准的颜色插值。（二）端点色模式端点色模式简单来说就是显示端点色颜色的模式，通常有：RGB、L、查分、HDR模式，ASTC可以根据每个像素需要存储的颜色类型来自由选择颜色模式。比如有一个色块只有亮暗变化，那就只需要存储Alpha值，如果这时候还存储RGB颜色就会浪费bit，所以这个时候可以选择亮度模式（L）；而RGB模式可以表达的颜色最自由，所以它适合颜色负责的块。（三）索引精度： 索引精度 &#x3D; 每个像素用多少 bit，来表示它在端点色之间的位置（插值比例）想象你有两种颜色：● 左端：黑色● 右端：白色中间有一个滑块，决定颜色偏向哪一边 低索引精度（2 bit）  ：可选位置：4 个[黑]──┬──┬──┬──[白]      0  1  2  3只能选这 4 个位置之一， 颜色是 跳着变的 高索引精度（6 bit）可选位置：64 个[黑]──────────────────────────────[白]  颜色变化 非常平滑所以索引精度代表这个像素能在俩个端点色中选择用什么颜色，越高，则颜色越平滑。
-]]></content>
-      <categories>
-        <category>Unity开发</category>
-      </categories>
-  </entry>
-  <entry>
-    <title>Tolua框架学习（Wrap文件）</title>
-    <url>/xiaomin/2024/10/02/ToLua_Wrap/</url>
-    <content><![CDATA[
-/* 页面内深色代码块样式：对本页所有 fenced code blocks 生效 */
-pre, pre code, code {
-    background: #0b1116 !important;
-    color: #d6deeb !important;
-    border-radius: 6px;
-}
-pre {
-    padding: 16px !important;
-    overflow: auto;
-    line-height: 1.5;
-}
-code { font-family: Consolas, "Courier New", monospace; }
-
-
-
-一、什么是Wrap文件Wrap（包装类） 是 ToLua 自动生成的 C# 静态类，作为 Lua 和 C# 之间的桥梁。每个需要导出到 Lua 的 C# 类都会生成一个对应的 XxxWrap.cs 文件。┌─────────────┐         ┌────────────────┐         ┌─────────────────┐│  Lua 脚本    		│ ──────▶ │  XxxWrap.cs       │ ──────▶ │  原生 C# 类          ││ go:SetActive 	│         	│ (自动生成桥梁)  	     │        		│ GameObject            │└─────────────┘         └────────────────┘         └─────────────────┘二、生成流程总览┌──────────────────┐│ 1. CustomSettings 	     │  ← 用户配置要导出的类型列表└────────┬─────────┘         	     ▼┌──────────────────┐│ 2. ToLuaMenu     		     │  ← 菜单入口，处理类型依赖└────────┬─────────┘         	     ▼┌──────────────────┐│ 3. ToLuaExport   		     │  ← 核心：通过反射分析类型，生成代码└────────┬─────────┘         	     ▼┌──────────────────┐│ 4. XxxWrap.cs    		     │  ← 输出：生成的包装类文件└────────┬─────────┘         	     ▼┌──────────────────┐│ 5. LuaBinder.cs  		     │  ← 汇总：注册所有 Wrap 到 LuaState└──────────────────┘CustomSetting代码结构如下：
-// 定义要导出到 Lua 的类型public static BindType[] customTypeList = &#123;    _GT(typeof(GameObject)),           // 导出 GameObject    _GT(typeof(Transform)),            // 导出 Transform    _GT(typeof(UILabel)),              // 导出 NGUI 组件    // ... 更多类型&#125;;// 定义要导出的委托类型public static DelegateType[] customDelegateList = &#123;    _DT(typeof(Action)),    _DT(typeof(UnityAction)),&#125;;生成Wrap文件接口：[MenuItem(&quot;Lua/Gen Lua Wrap Files&quot;, false, 1)]public static void GenerateClassWraps() &#123;    // 1. 获取配置的类型列表    BindType[] typeList = CustomSettings.customTypeList;        // 2. 处理继承关系，自动添加基类    BindType[] list = GenBindTypes(typeList);        // 3. 遍历每个类型，生成 Wrap    for (int i = 0; i &lt; list.Length; i++) &#123;        ToLuaExport.Clear();        ToLuaExport.className = list[i].name;        ToLuaExport.type = list[i].type;        // ... 设置其他属性        ToLuaExport.Generate(CustomSettings.saveDir);  // 核心生成逻辑    &#125;&#125;
-C#类转化成Wrap文件原理这个函数会通过反射收集类里所有的方法、属性、事件、字段等。然后根据各方法和属性的封装进行筛选，如私有变量和函数就会被剔除掉不会放入Wrap文件当中，相应Lua也调用不到。
-public static void Generate(string dir) &#123;    // 1. 初始化    InitMethods();       // 收集所有方法    InitPropertyList();  // 收集所有属性、字段、事件    InitCtorList();      // 收集所有构造函数        // 2. 开始生成代码    BeginCodeGen();      // 生成类定义头        // 3. 生成各部分代码    GenRegisterFunction();      // 生成 Register 函数    GenConstructFunction();     // 生成构造函数包装    GenItemPropertyFunction();  // 生成索引器    GenFunctions();             // 生成所有方法包装    GenIndexFunc();             // 生成 __index 元方法    GenNewIndexFunc();          // 生成 __newindex 元方法    GenEventFunctions();        // 生成事件相关函数        // 4. 结束生成    EndCodeGen(dir);     // 保存文件&#125;
-下面以收集方法的函数举例，其他类型基本相似：
-List&lt;_MethodBase&gt; list = new List&lt;_MethodBase&gt;();MethodInfo[] infos = type.GetMethods(BindingFlags.Instance | binding);for (int i = 0; i &lt; infos.Length; i++)&#123;    list.Add(new _MethodBase(infos[i]));&#125;for (int i = list.Count - 1; i &gt;= 0; --i)&#123;    //去掉操作符函数    if (list[i].Name.StartsWith(&quot;op_&quot;) || list[i].Name.StartsWith(&quot;add_&quot;) || list[i].Name.StartsWith(&quot;remove_&quot;))    &#123;        if (!IsNeedOp(list[i].Name))        &#123;            list.RemoveAt(i);        &#125;        continue;    &#125;    //扔掉 unity3d 废弃的函数                    if (IsObsolete(list[i].Method))    &#123;        list.RemoveAt(i);    &#125;&#125;
-三、生成的 Wrap 代码结构以 UnityEngine_GameObjectWrap.cs 为例：
-public class UnityEngine_GameObjectWrap&#123;    // ==================== 1. 注册函数 ====================    public static void Register(LuaState L)    &#123;        // 开始类定义，指定基类        L.BeginClass(typeof(GameObject), typeof(UnityEngine.Object));    // 注册方法    L.RegFunction(&quot;SetActive&quot;, SetActive);    L.RegFunction(&quot;GetComponent&quot;, GetComponent);    L.RegFunction(&quot;Find&quot;, Find);    L.RegFunction(&quot;New&quot;, _CreateUnityEngine_GameObject);  // 构造函数        // 注册元方法    L.RegFunction(&quot;__eq&quot;, op_Equality);    L.RegFunction(&quot;__tostring&quot;, ToLua.op_ToString);        // 注册属性 (getter, setter)    L.RegVar(&quot;transform&quot;, get_transform, null);        // 只读    L.RegVar(&quot;layer&quot;, get_layer, set_layer);           // 可读写    L.RegVar(&quot;activeSelf&quot;, get_activeSelf, null);      // 只读        L.EndClass();&#125;// ==================== 2. 构造函数包装 ====================[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]static int _CreateUnityEngine_GameObject(IntPtr L)&#123;    int count = LuaDLL.lua_gettop(L);  // 获取参数数量        if (count == 0) &#123;        // new GameObject()        GameObject obj = new GameObject();        ToLua.PushSealed(L, obj);        return 1;    &#125;    else if (count == 1 &amp;&amp; TypeChecker.CheckTypes&lt;string&gt;(L, 1)) &#123;        // new GameObject(name)        string arg0 = ToLua.ToString(L, 1);        GameObject obj = new GameObject(arg0);        ToLua.PushSealed(L, obj);        return 1;    &#125;    // ... 处理其他重载&#125;// ==================== 3. 方法包装 ====================[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]static int SetActive(IntPtr L)&#123;    try &#123;        // 检查参数数量        ToLua.CheckArgsCount(L, 2);                // 从栈上获取 self 对象        GameObject obj = (GameObject)ToLua.CheckObject(L, 1, typeof(GameObject));                // 从栈上获取参数        bool arg0 = LuaDLL.luaL_checkboolean(L, 2);                // 调用真正的 C# 方法        obj.SetActive(arg0);                return 0;  // 无返回值    &#125;    catch (Exception e) &#123;        return LuaDLL.toluaL_exception(L, e);    &#125;&#125;// ==================== 4. 属性 Getter ====================[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]static int get_transform(IntPtr L)&#123;    object o = null;    try &#123;        o = ToLua.ToObject(L, 1);        GameObject obj = (GameObject)o;        Transform ret = obj.transform;        ToLua.Push(L, ret);  // 将返回值压入栈        return 1;    &#125;    catch (Exception e) &#123;        return LuaDLL.toluaL_exception(L, e, o, &quot;attempt to get transform&quot;);    &#125;&#125;// ==================== 5. 属性 Setter ====================[MonoPInvokeCallbackAttribute(typeof(LuaCSFunction))]static int set_layer(IntPtr L)&#123;    object o = null;    try &#123;        o = ToLua.ToObject(L, 1);        GameObject obj = (GameObject)o;        int arg0 = (int)LuaDLL.luaL_checknumber(L, 2);        obj.layer = arg0;        return 0;    &#125;    catch (Exception e) &#123;        return LuaDLL.toluaL_exception(L, e, o, &quot;attempt to set layer&quot;);    &#125;&#125;&#125;
-生成Wrap类后需要通过LuaBinder统一注册到LuaState：
-public static class LuaBinder&#123;    public static void Bind(LuaState L)    &#123;        L.BeginModule(null);              // 全局模块                // 注册各个 Wrap        AnimationMgrWrap.Register(L);        CommonUtilsWrap.Register(L);        // ...         L.BeginModule(&quot;UnityEngine&quot;);     // UnityEngine 命名空间        UnityEngine_GameObjectWrap.Register(L);        UnityEngine_TransformWrap.Register(L);        // ...        L.EndModule();                L.EndModule();    &#125;&#125;
-四、具体Lua调用到C#函数的流程当 Lua 调用go：SetActive(true)时：
-
-Lua 调用 SetActive ↓
-查找 GameObject metatable 的 SetActive 函数 ↓
-调用 UnityEngine_GameObjectWrap.SetActive(IntPtr L) ↓
-从 Lua 栈获取参数:
-位置 1: self (GameObject userdata)
-位置 2: true (boolean)   ↓
-
-
-通过 ObjectTranslator 将 userdata 转换为 C# GameObject ↓
-调用真正的 C# 方法: obj.SetActive(true) ↓
-返回结果到 Lua 栈第一步到第二步比较好理解，lua调用SetActive的时候首先就是查找GameObject元表里是否有SetActive这个方法，有则调用。而第二步到第三步可能会有点疑问为什么可以直接调用到Wrap文件，要理解这一点需要理解ToLua是如何把Wrap文件注册到Lua表里的。看代码：
-
-// C# 端执行 Registerpublic static void Register(LuaState L)&#123;    L.BeginClass(typeof(GameObject), ...);    L.RegFunction(&quot;SetActive&quot;, SetActive);  // ← 关键！    L.EndClass();&#125;// RegFunction 的实现public void RegFunction(string name, LuaCSFunction func)&#123;    // 把 C# 函数转成内存地址（函数指针）    IntPtr fn = Marshal.GetFunctionPointerForDelegate(func);        // 调用 C 库，把这个函数指针存入当前 Lua table    LuaDLL.tolua_function(L, name, fn);&#125;
-可以看到在注册的时候会先把C#的SetActive函数转成函数指针然后放入Lua表里，也就是说Lua端执行SetActive函数就是直接执行的Wrap文件的SetActive函数！
-]]></content>
       <categories>
         <category>Unity开发</category>
       </categories>
